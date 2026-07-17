@@ -67,4 +67,4 @@ vendor/leaflet.js, leaflet.css   地図ライブラリ (1.9.4)
 vendor/setagaya-boundary.js      世田谷区の行政界
 ```
 
-プレビュー用に `Workspace/.claude/launch.json` に `setagaya-ame`（port 8123）を追加済み。
+プレビュー用に `Workspace/.claude/launch.json` に `ame`（port 8123）を追加済み。
