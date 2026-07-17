@@ -1,0 +1,532 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>世田谷区 雨予報シミュレーター</title>
+<meta name="description" content="世田谷区の今日・明日の1時間ごとの天気と、気象庁の雨雲レーダー（1時間前〜15時間先）">
+<meta name="theme-color" content="#11141a" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f4f6fa" media="(prefers-color-scheme: light)">
+<meta name="apple-mobile-web-app-title" content="世田谷の雨">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌂</text></svg>">
+<link rel="stylesheet" href="vendor/leaflet.css">
+<style>
+  :root {
+    --bg: #f4f6fa;
+    --card: #ffffff;
+    --ink: #1a1d24;
+    --muted: #6b7280;
+    --line: #e3e7ee;
+    --accent: #2b7fff;
+    --accent-soft: #e8f1ff;
+    --warn: #e8663d;
+    --shadow: 0 1px 3px rgba(20,30,60,.08), 0 8px 24px rgba(20,30,60,.06);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #11141a;
+      --card: #191d26;
+      --ink: #e8ecf4;
+      --muted: #9aa3b2;
+      --line: #2a303c;
+      --accent: #5a9dff;
+      --accent-soft: #1e2a3d;
+      --warn: #ff8b63;
+      --shadow: 0 1px 3px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.3);
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font-family: "Segoe UI", "Hiragino Kaku Gothic ProN", "Yu Gothic UI", Meiryo, system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 20px 16px 48px; }
+
+  header { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; }
+  h1 { font-size: 21px; margin: 0; letter-spacing: .02em; }
+  .updated { font-size: 12px; color: var(--muted); margin-left: auto; }
+  button.reload {
+    font: inherit; font-size: 12px; padding: 5px 12px; border-radius: 999px;
+    border: 1px solid var(--line); background: var(--card); color: var(--ink); cursor: pointer;
+  }
+  button.reload:hover { border-color: var(--accent); color: var(--accent); }
+
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; box-shadow: var(--shadow); margin-bottom: 18px; }
+  .card-head { padding: 14px 18px; border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .card-head h2 { font-size: 14px; margin: 0; font-weight: 600; letter-spacing: .04em; }
+  .card-body { padding: 16px 18px; }
+
+  /* verdict */
+  #verdict { display: flex; align-items: center; gap: 16px; padding: 18px; }
+  #verdict .big { font-size: 40px; line-height: 1; }
+  #verdict .head { font-size: 19px; font-weight: 700; margin-bottom: 4px; }
+  #verdict .sub { font-size: 13px; color: var(--muted); line-height: 1.6; }
+
+  /* tabs */
+  .tabs { display: flex; gap: 4px; background: var(--bg); padding: 3px; border-radius: 999px; border: 1px solid var(--line); }
+  .tabs button {
+    font: inherit; font-size: 13px; padding: 5px 18px; border-radius: 999px;
+    border: 0; background: transparent; color: var(--muted); cursor: pointer;
+  }
+  .tabs button.on { background: var(--card); color: var(--ink); font-weight: 600; box-shadow: 0 1px 2px rgba(0,0,0,.12); }
+  .daynote { font-size: 12px; color: var(--muted); margin-left: auto; }
+
+  /* hourly strip */
+  /* position:relative は .hr の offsetLeft をストリップ基準にするため(オートスクロール計算で使う) */
+  .strip { display: flex; overflow-x: auto; gap: 0; padding-bottom: 6px; position: relative; }
+  .hr {
+    flex: 0 0 54px; text-align: center; padding: 6px 0 8px; border-radius: 8px; position: relative;
+  }
+  .hr.now { background: var(--accent-soft); }
+  .hr .t { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .hr.now .t { color: var(--accent); font-weight: 700; }
+  .hr .ico { font-size: 19px; height: 26px; line-height: 26px; }
+  .hr .barbox { height: 74px; display: flex; align-items: flex-end; justify-content: center; }
+  .hr .bar {
+    width: 16px; border-radius: 4px 4px 2px 2px; min-height: 2px;
+    background: linear-gradient(180deg, var(--accent), #7fb4ff);
+  }
+  .hr .bar.dry { background: var(--line); }
+  .hr .pp { font-size: 11px; margin-top: 5px; font-variant-numeric: tabular-nums; }
+  .hr .pp.hi { color: var(--accent); font-weight: 700; }
+  .hr .mm { font-size: 10px; color: var(--accent); height: 13px; font-variant-numeric: tabular-nums; }
+  .hr .tmp { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .axis { font-size: 11px; color: var(--muted); display: flex; gap: 14px; margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--line); }
+
+  /* radar */
+  #map { height: clamp(320px, 60vh, 520px); border-radius: 0 0 14px 14px; z-index: 0; }
+  .timeline { padding: 12px 18px 14px; border-top: 1px solid var(--line); }
+  .tl-top { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
+  #play {
+    font: inherit; width: 34px; height: 34px; border-radius: 50%; border: 1px solid var(--line);
+    background: var(--card); color: var(--ink); cursor: pointer; font-size: 13px; flex: 0 0 auto;
+  }
+  #play:hover { border-color: var(--accent); color: var(--accent); }
+  #frameLabel { font-size: 15px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .badge { font-size: 11px; padding: 2px 9px; border-radius: 999px; font-weight: 600; }
+  .badge.past { background: var(--line); color: var(--muted); }
+  .badge.fc { background: var(--accent-soft); color: var(--accent); }
+  #slider { width: 100%; accent-color: var(--accent); }
+  /* コマ番号は等間隔だが時間は不等間隔なので、目盛りは実位置に置く */
+  .ticks { position: relative; height: 15px; font-size: 11px; color: var(--muted); margin-top: 2px; }
+  .ticks span { position: absolute; white-space: nowrap; }
+  #frameLead { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .legend { display: flex; align-items: center; gap: 2px; flex-wrap: wrap; font-size: 11px; color: var(--muted); margin-top: 12px; }
+  .legend i { width: 26px; height: 11px; display: inline-block; }
+  .legend .lb { margin-right: 8px; }
+
+  @media (max-width: 480px) {
+    .wrap { padding: 14px 10px 32px; }
+    h1 { font-size: 17px; }
+    .card-head, .card-body, .timeline { padding-left: 12px; padding-right: 12px; }
+    #verdict { padding: 14px; gap: 12px; }
+    #verdict .big { font-size: 32px; }
+    #verdict .head { font-size: 16px; }
+    .legend .lb { width: 100%; margin-bottom: 2px; }
+  }
+
+  .err { color: var(--warn); font-size: 13px; padding: 14px 18px; }
+  .foot { font-size: 11px; color: var(--muted); text-align: center; line-height: 1.8; }
+  .foot a { color: var(--muted); }
+  .leaflet-container { background: var(--bg); font: inherit; }
+  .home-btn {
+    font-size: 17px; line-height: 26px; text-align: center; font-weight: 700;
+    color: #e8663d !important; text-decoration: none;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>🌂 世田谷区 雨予報シミュレーター</h1>
+    <span class="updated" id="updated">読み込み中…</span>
+    <button class="reload" id="reload">更新</button>
+  </header>
+
+  <section class="card">
+    <div id="verdict">
+      <div class="big" id="vIcon">⌛</div>
+      <div>
+        <div class="head" id="vHead">予報を取得しています…</div>
+        <div class="sub" id="vSub">気象庁・Open-Meteo に接続中</div>
+      </div>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="card-head">
+      <h2>1時間ごとの天気</h2>
+      <div class="tabs" id="tabs">
+        <button data-day="0" class="on">今日</button>
+        <button data-day="1">明日</button>
+      </div>
+      <span class="daynote" id="daynote"></span>
+    </div>
+    <div class="card-body">
+      <div class="strip" id="strip"></div>
+      <div class="axis">
+        <span>バー＝降水確率</span><span style="color:var(--accent)">青字＝雨量(mm/h)</span><span>下段＝気温(℃)</span>
+      </div>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="card-head">
+      <h2>雨雲レーダー（実況 1時間前 → 予報 15時間後）</h2>
+    </div>
+    <div class="timeline">
+      <div class="tl-top">
+        <button id="play" title="再生 / 停止">▶</button>
+        <span id="frameLabel">--:--</span>
+        <span class="badge past" id="frameBadge">読み込み中</span>
+        <span id="frameLead"></span>
+      </div>
+      <input type="range" id="slider" min="0" max="0" value="0">
+      <div class="ticks" id="ticks"></div>
+      <div class="legend" id="legend"></div>
+    </div>
+    <div id="map"></div>
+  </section>
+
+  <p class="foot">
+    天気・気温・降水確率: <a href="https://open-meteo.com/" target="_blank" rel="noopener">Open-Meteo</a>（世田谷区役所 35.646°N, 139.653°E）<br>
+    雨雲レーダー: 気象庁 高解像度降水ナウキャスト（〜1時間先）＋ 降水短時間予報（〜15時間先）／ 地図: 国土地理院
+  </p>
+</div>
+
+<script src="vendor/leaflet.js"></script>
+<script src="vendor/setagaya-boundary.js"></script>
+<script>
+const LAT = 35.6464, LON = 139.6531;
+
+/* ---------- WMO weather code -> 絵文字 / 名称 ---------- */
+const WMO = {
+  0:['☀️','快晴'], 1:['🌤️','晴れ'], 2:['⛅','薄曇り'], 3:['☁️','曇り'],
+  45:['🌫️','霧'], 48:['🌫️','霧'],
+  51:['🌦️','霧雨'], 53:['🌦️','霧雨'], 55:['🌦️','強い霧雨'],
+  56:['🌧️','凍る霧雨'], 57:['🌧️','凍る霧雨'],
+  61:['🌧️','弱い雨'], 63:['🌧️','雨'], 65:['🌧️','強い雨'],
+  66:['🌧️','凍る雨'], 67:['🌧️','凍る雨'],
+  71:['🌨️','弱い雪'], 73:['🌨️','雪'], 75:['🌨️','強い雪'], 77:['🌨️','霧雪'],
+  80:['🌦️','にわか雨'], 81:['🌧️','にわか雨'], 82:['⛈️','激しいにわか雨'],
+  85:['🌨️','にわか雪'], 86:['🌨️','強いにわか雪'],
+  95:['⛈️','雷雨'], 96:['⛈️','雷雨(ひょう)'], 99:['⛈️','激しい雷雨(ひょう)']
+};
+const wmo = c => WMO[c] || ['❓','不明'];
+
+const pad = n => String(n).padStart(2,'0');
+const $ = id => document.getElementById(id);
+
+/* ---------- 1時間ごとの予報 ---------- */
+let hourly = null, activeDay = 0;
+
+async function loadForecast() {
+  const url = 'https://api.open-meteo.com/v1/forecast'
+    + `?latitude=${LAT}&longitude=${LON}`
+    + '&hourly=temperature_2m,precipitation_probability,precipitation,weather_code'
+    + '&timezone=Asia%2FTokyo&forecast_days=2';
+  const r = await fetch(url);
+  if (!r.ok) throw new Error('Open-Meteo ' + r.status);
+  const j = await r.json();
+  const h = j.hourly;
+  hourly = h.time.map((t, i) => ({
+    time: t,
+    date: t.slice(0,10),
+    hour: +t.slice(11,13),
+    temp: h.temperature_2m[i],
+    prob: h.precipitation_probability[i] ?? 0,
+    mm: h.precipitation[i] ?? 0,
+    code: h.weather_code[i]
+  }));
+  renderDay(activeDay);
+  renderVerdict();
+  $('updated').textContent = '更新 ' + new Date().toLocaleTimeString('ja-JP', {hour:'2-digit', minute:'2-digit'});
+}
+
+function daysList() {
+  const seen = [];
+  for (const x of hourly) if (!seen.includes(x.date)) seen.push(x.date);
+  return seen;
+}
+
+function nowHourKey() {
+  const n = new Date(new Date().toLocaleString('en-US', {timeZone:'Asia/Tokyo'}));
+  return `${n.getFullYear()}-${pad(n.getMonth()+1)}-${pad(n.getDate())}|${n.getHours()}`;
+}
+
+function renderDay(d) {
+  activeDay = d;
+  const date = daysList()[d];
+  const rows = hourly.filter(x => x.date === date);
+  const nk = nowHourKey();
+  const strip = $('strip');
+  strip.innerHTML = '';
+  let scrollTo = null;
+
+  for (const x of rows) {
+    const isNow = `${x.date}|${x.hour}` === nk;
+    const el = document.createElement('div');
+    el.className = 'hr' + (isNow ? ' now' : '');
+    const [ico] = wmo(x.code);
+    const h = Math.max(2, Math.round(x.prob / 100 * 74));
+    el.innerHTML =
+      `<div class="t">${isNow ? '今' : x.hour + '時'}</div>` +
+      `<div class="ico" title="${wmo(x.code)[1]}">${ico}</div>` +
+      `<div class="barbox"><div class="bar${x.prob < 30 ? ' dry' : ''}" style="height:${h}px"></div></div>` +
+      `<div class="pp${x.prob >= 50 ? ' hi' : ''}">${x.prob}%</div>` +
+      `<div class="mm">${x.mm > 0 ? x.mm.toFixed(1) : ''}</div>` +
+      `<div class="tmp">${Math.round(x.temp)}°</div>`;
+    strip.appendChild(el);
+    if (isNow) scrollTo = el;
+  }
+
+  const dt = new Date(date + 'T00:00:00');
+  const wd = ['日','月','火','水','木','金','土'][dt.getDay()];
+  const mx = Math.max(...rows.map(r => r.temp)), mn = Math.min(...rows.map(r => r.temp));
+  $('daynote').textContent = `${dt.getMonth()+1}/${dt.getDate()}(${wd})　最高 ${Math.round(mx)}° / 最低 ${Math.round(mn)}°`;
+
+  for (const b of $('tabs').children) b.classList.toggle('on', +b.dataset.day === d);
+  // 「今」を横スクロールの中央へ。scrollIntoView はページ全体も動かすので使わない
+  strip.scrollLeft = scrollTo
+    ? scrollTo.offsetLeft - strip.clientWidth / 2 + scrollTo.offsetWidth / 2
+    : 0;
+}
+
+/* 雨が降る時間帯をまとめて「傘いる / いらない」の一言にする */
+function rainSpans(rows, th = 50) {
+  const out = [];
+  let s = null;
+  for (const x of rows) {
+    const wet = x.prob >= th || x.mm >= 0.5;
+    if (wet && s === null) s = x.hour;
+    if (!wet && s !== null) { out.push([s, x.hour]); s = null; }
+  }
+  if (s !== null) out.push([s, 24]);
+  return out;
+}
+const spanText = sp => sp.map(([a,b]) => b - a <= 1 ? `${a}時ごろ` : `${a}〜${b}時`).join('、');
+
+function renderVerdict() {
+  const days = daysList();
+  const nk = nowHourKey();
+  const todayRows = hourly.filter(x => x.date === days[0]);
+  const i = todayRows.findIndex(x => `${x.date}|${x.hour}` === nk);
+  const ahead = i >= 0 ? todayRows.slice(i) : todayRows;
+  const tomRows = hourly.filter(x => x.date === days[1]);
+
+  const tSpans = rainSpans(ahead), mSpans = rainSpans(tomRows);
+  const peak = Math.max(0, ...ahead.map(x => x.prob));
+  let icon, head, sub;
+
+  if (tSpans.length) {
+    icon = '☔'; head = `今日この後 ${spanText(tSpans)} に雨`;
+    sub = `最大降水確率 ${peak}%。傘を持って出かけてください。`;
+  } else if (peak >= 30) {
+    icon = '🌂'; head = '今日はにわか雨の可能性';
+    sub = `最大降水確率 ${peak}%。折りたたみ傘があると安心です。`;
+  } else {
+    icon = '🙆'; head = '今日この後の雨の心配はなさそう';
+    sub = `最大降水確率 ${peak}%。`;
+  }
+  sub += mSpans.length
+    ? `　明日は ${spanText(mSpans)} に雨の予報です。`
+    : '　明日も雨の予報はありません。';
+
+  $('vIcon').textContent = icon;
+  $('vHead').textContent = head;
+  $('vSub').textContent = sub;
+}
+
+$('tabs').addEventListener('click', e => {
+  const b = e.target.closest('button');
+  if (b && hourly) renderDay(+b.dataset.day);
+});
+
+/* ---------- 雨雲レーダー ----------
+   1時間先までは高解像度降水ナウキャスト(hrpns, 5分刻み)、
+   その先は降水短時間予報(rasrf, 1時間刻み・最大15時間先)に切り替えて繋ぐ。 */
+const JMA = 'https://www.jma.go.jp/bosai/jmatile/data';
+
+// ナウキャストの先。今から何時間後のコマを出すか（だんだん粗く）
+const LADDER = [2, 3, 4, 5, 6, 9, 12, 15];
+const FAR_MAX_LEAD = 15; // 降水短時間予報が出せる上限(basetimeから15時間)
+const map = L.map('map', { center: [LAT, LON], zoom: 11, zoomControl: true });
+L.tileLayer('https://cyberjapandata.gsi.go.jp/xyz/pale/{z}/{x}/{y}.png', {
+  attribution: '国土地理院', maxZoom: 14
+}).addTo(map);
+// 世田谷区の輪郭。ズーム11だと区役所の点だけでは位置が掴めないので境界を描く
+const ward = L.geoJSON(SETAGAYA_GEO, {
+  style: { color: '#e8663d', weight: 2.5, fillColor: '#e8663d', fillOpacity: .06 }
+}).addTo(map);
+ward.bringToBack();
+L.circleMarker([LAT, LON], { radius: 4, color: '#e8663d', fillColor: '#fff', fillOpacity: 1, weight: 2 })
+  .addTo(map).bindTooltip('世田谷区役所');
+
+// 地図を動かした後に世田谷区へ戻すボタン
+const HomeBtn = L.Control.extend({
+  options: { position: 'topleft' },
+  onAdd() {
+    const a = L.DomUtil.create('a', 'leaflet-bar leaflet-control home-btn');
+    a.href = '#'; a.title = '世田谷区を表示'; a.textContent = '⌂';
+    L.DomEvent.on(a, 'click', e => {
+      L.DomEvent.preventDefault(e);
+      map.fitBounds(ward.getBounds(), { padding: [12, 12] });
+    });
+    return a;
+  }
+});
+map.addControl(new HomeBtn());
+
+const RAIN_LEGEND = [
+  ['#F2F2FF','0.1'], ['#A0D2FF','1'], ['#218CFF','5'], ['#0041FF','10'],
+  ['#FAF500','20'], ['#FF9900','30'], ['#FF2800','50'], ['#B40068','80']
+];
+$('legend').innerHTML = '<span class="lb">雨量 mm/h</span>'
+  + RAIN_LEGEND.map(([c,l]) => `<span><i style="background:${c}"></i><br>${l}</span>`).join('')
+  + '<span style="margin-left:4px">以上</span>';
+
+let frames = [], layers = [], cur = 0, nowIdx = 0, timer = null;
+
+/** 気象庁の時刻文字列(UTCの yyyyMMddHHmmss)を Date にする */
+const tsToDate = v => new Date(Date.UTC(
+  +v.slice(0,4), +v.slice(4,6)-1, +v.slice(6,8), +v.slice(8,10), +v.slice(10,12)));
+
+/** Date を気象庁の時刻文字列に戻す */
+const dateToTs = d => `${d.getUTCFullYear()}${pad(d.getUTCMonth()+1)}${pad(d.getUTCDate())}`
+  + `${pad(d.getUTCHours())}${pad(d.getUTCMinutes())}00`;
+
+const jstOpts = { timeZone: 'Asia/Tokyo' };
+/** JST の HH:MM。日付をまたぐコマは「翌」を付ける */
+function jstLabel(v) {
+  const d = tsToDate(v);
+  const hm = d.toLocaleTimeString('ja-JP', { hour:'2-digit', minute:'2-digit', ...jstOpts });
+  const day = d.toLocaleDateString('ja-JP', { day:'numeric', ...jstOpts });
+  const today = new Date().toLocaleDateString('ja-JP', { day:'numeric', ...jstOpts });
+  return (day === today ? '' : '翌 ') + hm;
+}
+
+/** 「今から何分/何時間後」の表示 */
+function leadLabel(v) {
+  const m = Math.round((tsToDate(v) - Date.now()) / 60000);
+  if (Math.abs(m) < 3) return '';
+  if (m < 0) return `${-m}分前`;
+  return m < 90 ? `${m}分後` : `約${Math.round(m/60)}時間後`;
+}
+
+/**
+ * 降水短時間予報のコマを組む。
+ * 毎時(:00)の basetime だけが +1〜+15h のタイルを揃って持っている
+ * (:30 の basetime は解析のみでタイルが404になる)ので、最新の毎時 basetime を使う。
+ */
+function farFrames(rf) {
+  const hourly = rf.filter(x => x.elements.includes('rasrf') && x.basetime.slice(10) === '0000');
+  if (!hourly.length) return [];
+  const bt = hourly.map(x => x.basetime).sort().pop();
+  const btMs = tsToDate(bt).getTime();
+
+  const out = [], used = new Set();
+  for (const h of LADDER) {
+    // 予報は basetime+k時間 にしか無いので、「今からh時間後」をその格子に丸める
+    const k = Math.min(FAR_MAX_LEAD, Math.max(1, Math.round((Date.now() + h*3600e3 - btMs) / 3600e3)));
+    if (used.has(k)) continue;
+    used.add(k);
+    out.push({
+      basetime: bt,
+      validtime: dateToTs(new Date(btMs + k*3600e3)),
+      kind: 'rasrf', fc: true
+    });
+  }
+  return out;
+}
+
+async function loadRadar() {
+  const [n1, n2, rf] = await Promise.all([
+    fetch(`${JMA}/nowc/targetTimes_N1.json`).then(r => r.json()),
+    fetch(`${JMA}/nowc/targetTimes_N2.json`).then(r => r.json()),
+    fetch(`${JMA}/rasrf/targetTimes.json`).then(r => r.json()).catch(() => [])
+  ]);
+  // ナウキャストは新しい順。実況は直近1時間ぶん(13コマ)だけ使い、古い→新しい順に並べ直す
+  const past = n1.slice(0, 13).reverse().map(t => ({...t, kind:'nowc', fc:false}));
+  const near = n2.slice().reverse().map(t => ({...t, kind:'nowc', fc:true}));
+  frames = past.concat(near, farFrames(rf));
+  layers = new Array(frames.length).fill(null);
+
+  nowIdx = past.length - 1;
+  $('slider').max = frames.length - 1;
+  $('slider').value = nowIdx;
+  renderTicks();
+  show(nowIdx);
+}
+
+/** 目盛りはコマ番号が等間隔＝時間は不等間隔なので、実際の位置を測って置く */
+function renderTicks() {
+  const last = frames.length - 1;
+  const marks = [[0, '-60分'], [nowIdx, '今'], [nowIdx + 12, '+1時間']];
+  if (last > nowIdx + 12) {
+    const h = Math.round((tsToDate(frames[last].validtime) - Date.now()) / 3600e3);
+    marks.push([last, `+${h}時間`]);
+  }
+
+  $('ticks').innerHTML = marks.map(([i, label]) => {
+    const pct = i / last * 100;
+    const shift = pct < 5 ? 'none' : pct > 95 ? 'translateX(-100%)' : 'translateX(-50%)';
+    return `<span style="left:${pct}%;transform:${shift}">${label}</span>`;
+  }).join('');
+}
+
+function layerFor(i) {
+  if (!layers[i]) {
+    const f = frames[i];
+    const el = f.kind === 'rasrf' ? 'rasrf' : 'hrpns';
+    layers[i] = L.tileLayer(
+      `${JMA}/${f.kind}/${f.basetime}/none/${f.validtime}/surf/${el}/{z}/{x}/{y}.png`,
+      { opacity: 0, maxNativeZoom: 10, maxZoom: 14, attribution: '気象庁' }
+    ).addTo(map);
+  }
+  return layers[i];
+}
+
+function show(i) {
+  cur = i;
+  const f = frames[i];
+  layerFor(i).setOpacity(.75);
+  layers.forEach((l, k) => { if (l && k !== i) l.setOpacity(0); });
+  layerFor(Math.min(i + 1, frames.length - 1)); // 次コマを先読み
+  $('frameLabel').textContent = jstLabel(f.validtime);
+  $('frameLead').textContent = leadLabel(f.validtime);
+  const b = $('frameBadge');
+  b.textContent = f.kind === 'rasrf' ? '短時間予報'
+    : f.fc ? '予測' : (i === nowIdx ? '現在' : '実況');
+  b.className = 'badge ' + (f.fc ? 'fc' : 'past');
+  $('slider').value = i;
+}
+
+$('slider').addEventListener('input', e => { stop(); show(+e.target.value); });
+$('play').addEventListener('click', () => timer ? stop() : play());
+function play() {
+  $('play').textContent = '⏸';
+  timer = setInterval(() => show(cur >= frames.length - 1 ? 0 : cur + 1), 500);
+}
+function stop() {
+  clearInterval(timer); timer = null; $('play').textContent = '▶';
+}
+
+/* ---------- 起動 ---------- */
+async function boot() {
+  try { await loadForecast(); }
+  catch (e) {
+    $('vIcon').textContent = '⚠️';
+    $('vHead').textContent = '予報を取得できませんでした';
+    $('vSub').textContent = 'ネット接続を確認して「更新」を押してください（' + e.message + '）';
+  }
+  try { await loadRadar(); }
+  catch (e) {
+    $('frameBadge').textContent = 'レーダー取得失敗';
+  }
+}
+$('reload').addEventListener('click', () => { stop(); boot(); });
+boot();
+</script>
+</body>
+</html>
